@@ -8,8 +8,7 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const PORT = 8080;
-
+  const PORT = process.env.PORT || 8080;
   app.use(express.json());
 
   // In-memory storage for demo purposes (could use better-sqlite3 if persistence is needed)

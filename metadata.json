@@ -1,0 +1,7 @@
+{
+  "name": "智慧財富自動化系統 (Smart Wealth Automation)",
+  "description": "一個整合資訊採集、內容生成、多平台推廣與成效追蹤的自動化賺錢方案平台。",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}

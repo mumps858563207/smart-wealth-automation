@@ -217,21 +217,6 @@ app.post("/api/gemini/generate-image", apiKeyMiddleware, async (req, res) => {
 });
 
 
-        },
-      });
-
-      for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData) {
-          return res.json({ imageData: part.inlineData.data });
-        }
-      }
-      
-      throw new Error('No image generated');
-    } catch (error: any) {
-      console.error("Generate image error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
 
   // Get Featured Image Prompt
   app.post("/api/gemini/featured-image-prompt", apiKeyMiddleware, async (req, res) => {

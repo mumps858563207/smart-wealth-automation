@@ -202,9 +202,13 @@ async function startServer() {
           parts: [{ text: prompt }],
         },
         config: {
-          imageConfig: {
-            aspectRatio: "16:9",
-          },
+         const response = await ai.models.generateContent({
+  model: 'gemini-2.5-flash-image',
+  contents: {
+    parts: [{ text: prompt }],
+  },
+});
+
         },
       });
 

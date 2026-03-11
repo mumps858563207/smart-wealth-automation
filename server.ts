@@ -188,26 +188,34 @@ async function startServer() {
     }
   });
 
-  // Generate Image
-  app.post("/api/gemini/generate-image", apiKeyMiddleware, async (req, res) => {
-    try {
-      const { prompt } = req.body;
-      if (!prompt) {
-        return res.status(400).json({ error: "Prompt is required" });
-      }
+// Generate Image
+app.post("/api/gemini/generate-image", apiKeyMiddleware, async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (!prompt) {
+      return res.status(400).json({ error: "Prompt is required" });
+    }
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: {
-          parts: [{ text: prompt }],
-        },
-        config: {
-         const response = await ai.models.generateContent({
-  model: 'gemini-2.5-flash-image',
-  contents: {
-    parts: [{ text: prompt }],
-  },
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [{ text: prompt }],
+      },
+    });
+
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) {
+        return res.json({ imageData: part.inlineData.data });
+      }
+    }
+    
+    throw new Error('No image generated');
+  } catch (error: any) {
+    console.error("Generate image error:", error);
+    res.status(500).json({ error: error.message });
+  }
 });
+
 
         },
       });

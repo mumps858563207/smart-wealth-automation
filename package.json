@@ -1,9 +1,6 @@
 {
   "name": "smart-wealth-automation",
   "private": true,
-  {
-  "name": "smart-wealth-automation",
-  "private": true,
   "version": "0.0.1",
   "type": "module",
   "scripts": {
@@ -41,4 +38,3 @@
     "eslint-plugin-react": "^7.33.2"
   }
 }
-

@@ -1,6 +1,9 @@
 {
   "name": "smart-wealth-automation",
   "private": true,
+  {
+  "name": "smart-wealth-automation",
+  "private": true,
   "version": "0.0.1",
   "type": "module",
   "scripts": {
@@ -28,6 +31,9 @@
     "typescript": "^5.3.3",
     "vite": "^5.0.8",
     "tailwindcss": "^3.3.6",
+    "@tailwindcss/vite": "^4.0.0",
+    "tailwind-merge": "^2.2.0",
+    "clsx": "^2.0.0",
     "postcss": "^8.4.32",
     "autoprefixer": "^10.4.16",
     "eslint": "^8.55.0",

@@ -2,7 +2,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
-import { GoogleGenAI, Type } from "@google/genai";
+import OpenAI from "openai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,8 +12,11 @@ async function startServer() {
   const PORT = process.env.PORT || 8080;
   app.use(express.json());
 
-  // Initialize Gemini AI
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+  // Initialize OpenAI Compatible API
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY || process.env.MUMPSAI_API_KEY || "mumps2605",
+    baseURL: process.env.OPENAI_BASE_URL || "https://mumpsapi.zeabur.app/v1"
+  });
 
   // API Key middleware
   const apiKeyMiddleware = (req: any, res: any, next: any) => {
@@ -37,7 +40,7 @@ async function startServer() {
     campaigns: []
   };
 
-  // ============ Gemini API Proxy Routes ============
+  // ============ OpenAI Compatible API Routes ============
 
   // Analyze Niche
   app.post("/api/gemini/analyze-niche", apiKeyMiddleware, async (req, res) => {
@@ -47,28 +50,20 @@ async function startServer() {
         return res.status(400).json({ error: "Topic is required" });
       }
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `分析利基市場：${topic}。請提供市場趨勢、競爭程度、潛在收益點以及建議的內容方向。請確保建議的內容方向包含多樣化的格式，如：開箱影片、趨勢分析、投資建議等。請以繁體中文回答。`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              trend: { type: Type.STRING },
-              competition: { type: Type.STRING },
-              potentialRevenue: { type: Type.STRING },
-              contentIdeas: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
-            },
-            required: ["trend", "competition", "potentialRevenue", "contentIdeas"]
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: `分析利基市場：${topic}。請提供市場趨勢、競爭程度、潛在收益點以及建議的內容方向。請確保建議的內容方向包含多樣化的格式，如：開箱影片、趨勢分析、投資建議等。請以繁體中文回答。請以 JSON 格式回答，包含以下欄位：trend, competition, potentialRevenue, contentIdeas (陣列)`
           }
-        }
+        ],
+        temperature: 0.7,
+        response_format: { type: "json_object" }
       });
 
-      const result = JSON.parse(response.text || "{}");
+      const content = response.choices[0].message.content || "{}";
+      const result = JSON.parse(content);
       res.json(result);
     } catch (error: any) {
       console.error("Analyze niche error:", error);
@@ -148,12 +143,18 @@ async function startServer() {
         請以繁體中文撰寫，並加入免責聲明。`;
       }
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        temperature: 0.7
       });
 
-      res.json({ content: response.text });
+      res.json({ content: response.choices[0].message.content });
     } catch (error: any) {
       console.error("Generate content error:", error);
       res.status(500).json({ error: error.message });
@@ -176,47 +177,49 @@ async function startServer() {
       4. 結尾包含一個強力的行動呼籲 (CTA)
       請以繁體中文撰寫。`;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        temperature: 0.7
       });
 
-      res.json({ content: response.text });
+      res.json({ content: response.choices[0].message.content });
     } catch (error: any) {
       console.error("Generate monetized content error:", error);
       res.status(500).json({ error: error.message });
     }
   });
 
-// Generate Image
-app.post("/api/gemini/generate-image", apiKeyMiddleware, async (req, res) => {
-  try {
-    const { prompt } = req.body;
-    if (!prompt) {
-      return res.status(400).json({ error: "Prompt is required" });
-    }
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [{ text: prompt }],
-      },
-    });
-
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) {
-        return res.json({ imageData: part.inlineData.data });
+  // Generate Image
+  app.post("/api/gemini/generate-image", apiKeyMiddleware, async (req, res) => {
+    try {
+      const { prompt } = req.body;
+      if (!prompt) {
+        return res.status(400).json({ error: "Prompt is required" });
       }
+
+      const response = await openai.images.generate({
+        model: "dall-e-3",
+        prompt: prompt,
+        n: 1,
+        size: "1024x1024"
+      });
+
+      if (response.data && response.data.length > 0) {
+        return res.json({ imageUrl: response.data[0].url });
+      }
+      
+      throw new Error('No image generated');
+    } catch (error: any) {
+      console.error("Generate image error:", error);
+      res.status(500).json({ error: error.message });
     }
-    
-    throw new Error('No image generated');
-  } catch (error: any) {
-    console.error("Generate image error:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-
+  });
 
   // Get Featured Image Prompt
   app.post("/api/gemini/featured-image-prompt", apiKeyMiddleware, async (req, res) => {
@@ -226,15 +229,21 @@ app.post("/api/gemini/generate-image", apiKeyMiddleware, async (req, res) => {
         return res.status(400).json({ error: "Title and content are required" });
       }
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `根據以下文章標題和內容，生成一個適合用於 WordPress 文章精選圖片的 AI 繪圖提示詞 (Prompt)。
-        標題：${title}
-        內容摘要：${content.substring(0, 300)}...
-        請以英文回答，並確保提示詞是高品質、具備專業攝影或數位藝術風格的。`,
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: `根據以下文章標題和內容，生成一個適合用於 WordPress 文章精選圖片的 AI 繪圖提示詞 (Prompt)。
+            標題：${title}
+            內容摘要：${content.substring(0, 300)}...
+            請以英文回答，並確保提示詞是高品質、具備專業攝影或數位藝術風格的。`
+          }
+        ],
+        temperature: 0.7
       });
 
-      res.json({ prompt: response.text });
+      res.json({ prompt: response.choices[0].message.content });
     } catch (error: any) {
       console.error("Featured image prompt error:", error);
       res.status(500).json({ error: error.message });
@@ -249,19 +258,20 @@ app.post("/api/gemini/generate-image", apiKeyMiddleware, async (req, res) => {
         return res.status(400).json({ error: "Niche is required" });
       }
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `針對利基市場「${niche}」，請列出 5 個目前最熱門且具備營利潛力的內容主題。請以繁體中文回答。`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: `針對利基市場「${niche}」，請列出 5 個目前最熱門且具備營利潛力的內容主題。請以繁體中文回答，並以 JSON 陣列格式回答。`
           }
-        }
+        ],
+        temperature: 0.7,
+        response_format: { type: "json_object" }
       });
 
-      const result = JSON.parse(response.text || "[]");
+      const content = response.choices[0].message.content || "[]";
+      const result = JSON.parse(content);
       res.json(result);
     } catch (error: any) {
       console.error("Trending topics error:", error);
@@ -317,9 +327,13 @@ app.post("/api/gemini/generate-image", apiKeyMiddleware, async (req, res) => {
     });
   }
 
- app.listen(Number(PORT), "0.0.0.0", () => {
+  app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+}
+
+startServer();
+
 }
 
 startServer();

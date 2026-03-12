@@ -44,7 +44,9 @@ import {
   Bar
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
-import { geminiService } from './services/geminiService';
+
+import { openaiService } from './services/openaiService';
+
 import { wordpressService, WordPressConfig } from './services/wordpressService';
 import ReactMarkdown from 'react-markdown';
 import { cn } from './lib/utils';

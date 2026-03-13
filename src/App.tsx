@@ -22,6 +22,7 @@ import {
   Link2,
   Image as ImageIcon2,
   Trash2,
+  Check,
   Globe,
   Lock,
   User,
@@ -44,9 +45,7 @@ import {
   Bar
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
-
-import { openaiService } from './services/openaiService';
-
+import { geminiService } from './services/geminiService';
 import { wordpressService, WordPressConfig } from './services/wordpressService';
 import ReactMarkdown from 'react-markdown';
 import { cn } from './lib/utils';
@@ -64,26 +63,32 @@ export default function App() {
   const [recentPosts, setRecentPosts] = useState<any[]>(JSON.parse(localStorage.getItem('recent_posts') || '[]'));
   const [contentQueue, setContentQueue] = useState<any[]>(JSON.parse(localStorage.getItem('content_queue') || '[]'));
   const [isAutoPilotRunning, setIsAutoPilotRunning] = useState(false);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [nextCheckTime, setNextCheckTime] = useState<Date | null>(null);
   const [isPublishDirectly, setIsPublishDirectly] = useState(localStorage.getItem('publish_directly') === 'true');
   const [checkInterval, setCheckInterval] = useState<number>(Number(localStorage.getItem('check_interval')) || 1);
 
   const runAutoPilot = React.useCallback(async (isManual = false) => {
-    if (isAutoPilotRunning) return;
+    // Use a functional update or ref check to avoid stale closures without triggering re-renders in dependencies
+    // But since we want to access the latest contentQueue, we keep it in dependencies for now
+    // and fix the useEffect to not loop.
+    
     setIsAutoPilotRunning(true);
+    setLastChecked(new Date());
+    setNextCheckTime(new Date(Date.now() + checkInterval * 60 * 1000));
+    
     try {
       const log = (msg: string) => setAutoPilotLog(prev => [`[${new Date().toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' })}] ${msg}`, ...prev].slice(0, 15));
-      if (!isManual) {
-        // Only log if it's a background run or if we actually find something to do
-      } else {
-        log("🚀 啟動手動營利流程...");
-      }
       
       // 0. 檢查 WordPress 設定
       const config = wordpressService.getConfig();
       if (!config || !config.url) {
-        log("⚠️ 警告: WordPress 尚未設定，自動化發佈將跳過。");
-        log("💡 請前往「系統設定」完成 WordPress 配置。");
+        if (isManual) {
+          log("⚠️ 警告: WordPress 尚未設定，自動化發佈將跳過。");
+          log("💡 請前往「系統設定」完成 WordPress 配置。");
+        }
         setIsAutoPilotActive(false);
+        setIsAutoPilotRunning(false);
         return;
       }
 
@@ -95,7 +100,7 @@ export default function App() {
         
         // If it's a scheduled item and the time hasn't come yet, skip unless manually triggered
         if (scheduledTime && scheduledTime > new Date() && !isManual) {
-          log(`⏳ 下一個排程主題: ${typeof queueItem === 'string' ? queueItem : queueItem.topic} (預計 ${scheduledTime.toLocaleTimeString('zh-TW', { hour12: false })})`);
+          setIsAutoPilotRunning(false);
           return;
         }
 
@@ -107,6 +112,11 @@ export default function App() {
           return updated;
         });
       } else {
+        if (!isManual) {
+          setIsAutoPilotRunning(false);
+          return; 
+        }
+        
         log("🔍 正在分析市場趨勢並尋找熱門主題...");
         const topics = await geminiService.discoverTrendingTopics("AI 與數位自動化營利");
         selectedTopic = topics[Math.floor(Math.random() * topics.length)];
@@ -140,8 +150,14 @@ export default function App() {
       // 4. 生成並上傳精選圖片 (Optimization)
       try {
         log("🎨 正在生成文章精選圖片...");
-        const imagePrompt = await geminiService.getFeaturedImagePrompt(title, content);
-        const base64Image = await geminiService.generateImage(imagePrompt || title);
+        let base64Image = "";
+        try {
+          const imagePrompt = await geminiService.getFeaturedImagePrompt(title, content);
+          base64Image = await geminiService.generateImage(imagePrompt);
+        } catch (promptErr) {
+          log("⚠️ 複雜提示詞生成失敗，嘗試使用標題直接生成...");
+          base64Image = await geminiService.generateImage(title);
+        }
         
         log("🖼️ 正在上傳圖片至 WordPress 媒體庫...");
         const mediaResult = await wordpressService.uploadMedia(base64Image, `featured-${postResult.id}.png`);
@@ -163,15 +179,33 @@ export default function App() {
   }, [isAutoPilotRunning, contentQueue, affiliateId, isPublishDirectly]);
 
   // Auto-Pilot Logic
+  const autoPilotRef = React.useRef(runAutoPilot);
+  const isRunningRef = React.useRef(isAutoPilotRunning);
+  
+  useEffect(() => {
+    autoPilotRef.current = runAutoPilot;
+  }, [runAutoPilot]);
+
+  useEffect(() => {
+    isRunningRef.current = isAutoPilotRunning;
+  }, [isAutoPilotRunning]);
+
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (isAutoPilotActive) {
-      runAutoPilot(false);
-      // 使用設定的時間段檢查排程
-      interval = setInterval(() => runAutoPilot(false), checkInterval * 60 * 1000); 
+      const tick = () => {
+        if (!isRunningRef.current) {
+          autoPilotRef.current(false);
+        }
+      };
+      
+      tick();
+      interval = setInterval(tick, checkInterval * 60 * 1000); 
+    } else {
+      setNextCheckTime(null);
     }
     return () => clearInterval(interval);
-  }, [isAutoPilotActive, runAutoPilot, checkInterval]);
+  }, [isAutoPilotActive, checkInterval]);
 
   // Auto-fill with user provided data if empty (for demo/convenience)
   useEffect(() => {
@@ -427,6 +461,8 @@ export default function App() {
                 onClearQueue={() => { setContentQueue([]); localStorage.removeItem('content_queue'); }} 
                 onRunNow={() => runAutoPilot(true)} 
                 isRunning={isAutoPilotRunning} 
+                lastChecked={lastChecked}
+                nextCheckTime={nextCheckTime}
                 checkInterval={checkInterval}
                 onUpdateCheckInterval={(val) => {
                   setCheckInterval(val);
@@ -984,6 +1020,8 @@ function PromotionView({
   onClearQueue, 
   onRunNow, 
   isRunning,
+  lastChecked,
+  nextCheckTime,
   checkInterval,
   onUpdateCheckInterval,
   onUpdateQueue
@@ -998,6 +1036,8 @@ function PromotionView({
   onClearQueue: () => void, 
   onRunNow: () => void, 
   isRunning: boolean,
+  lastChecked: Date | null,
+  nextCheckTime: Date | null,
   checkInterval: number,
   onUpdateCheckInterval: (val: number) => void,
   onUpdateQueue: (newQueue: any[]) => void
@@ -1114,24 +1154,28 @@ function PromotionView({
             </div>
             
             <div className="space-y-4">
-              <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl">
-                <div className="flex items-center gap-3">
-                  <div className={cn("w-3 h-3 rounded-full", isActive ? "bg-emerald-500 animate-pulse" : "bg-zinc-300")} />
-                  <div>
-                    <p className="text-xs font-bold">自動駕駛模式</p>
-                    <p className="text-[10px] text-zinc-400">{isActive ? '正在背景運行中' : '已停止'}</p>
+                <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl">
+                  <div className="flex items-center gap-3">
+                    <div className={cn("w-3 h-3 rounded-full", isActive ? "bg-emerald-500 animate-pulse" : "bg-zinc-300")} />
+                    <div>
+                      <p className="text-xs font-bold">自動駕駛模式</p>
+                      <p className="text-[10px] text-zinc-400">
+                        {isActive ? '正在背景運行中' : '已停止'}
+                        {isActive && lastChecked && ` • 最後檢查: ${lastChecked.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' })}`}
+                        {isActive && nextCheckTime && ` • 下次檢查: ${nextCheckTime.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' })}`}
+                      </p>
+                    </div>
                   </div>
+                  <button 
+                    onClick={() => onToggle(!isActive)}
+                    className={cn(
+                      "px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all",
+                      isActive ? "bg-red-50 text-red-600 hover:bg-red-100" : "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                    )}
+                  >
+                    {isActive ? '停止運行' : '啟動運行'}
+                  </button>
                 </div>
-                <button 
-                  onClick={() => onToggle(!isActive)}
-                  className={cn(
-                    "px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all",
-                    isActive ? "bg-red-50 text-red-600 hover:bg-red-100" : "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
-                  )}
-                >
-                  {isActive ? '停止運行' : '啟動運行'}
-                </button>
-              </div>
             </div>
           </div>
 
@@ -1542,11 +1586,52 @@ function AnalyticsView() {
 }
 
 function AffiliateView({ affiliateId, setAffiliateId }: { affiliateId: string, setAffiliateId: (val: string) => void }) {
-  const networks = [
-    { name: 'Amazon Associates', status: '已連接', id: affiliateId, color: 'bg-orange-500' },
-    { name: 'Rakuten Advertising', status: '未連接', id: '-', color: 'bg-red-600' },
-    { name: 'CJ Affiliate', status: '未連接', id: '-', color: 'bg-emerald-600' },
-    { name: 'ShareASale', status: '未連接', id: '-', color: 'bg-blue-600' },
+  const [networks, setNetworks] = useState<any[]>(() => {
+    const saved = localStorage.getItem('affiliate_networks');
+    if (saved) return JSON.parse(saved);
+    return [
+      { id: '1', name: 'Amazon Associates', status: '已連接', trackingId: affiliateId, color: 'bg-orange-500' },
+      { id: '2', name: 'Rakuten Advertising', status: '未連接', trackingId: '-', color: 'bg-red-600' },
+      { id: '3', name: 'CJ Affiliate', status: '未連接', trackingId: '-', color: 'bg-emerald-600' },
+      { id: '4', name: 'ShareASale', status: '未連接', trackingId: '-', color: 'bg-blue-600' },
+    ];
+  });
+
+  const [isAdding, setIsAdding] = useState(false);
+  const [newNetwork, setNewNetwork] = useState({ name: '', trackingId: '', color: 'bg-zinc-600' });
+  const [showSuccess, setShowSuccess] = useState(false);
+
+  useEffect(() => {
+    // Sync Amazon ID if it changes globally
+    setNetworks(prev => prev.map(n => n.name === 'Amazon Associates' ? { ...n, trackingId: affiliateId, status: affiliateId ? '已連接' : '未連接' } : n));
+  }, [affiliateId]);
+
+  const handleUpdate = () => {
+    localStorage.setItem('affiliate_networks', JSON.stringify(networks));
+    setShowSuccess(true);
+    setTimeout(() => setShowSuccess(false), 3000);
+  };
+
+  const handleAddNetwork = () => {
+    if (!newNetwork.name) return;
+    const updated = [
+      ...networks,
+      { ...newNetwork, id: Math.random().toString(36).substr(2, 9), status: newNetwork.trackingId ? '已連接' : '未連接' }
+    ];
+    setNetworks(updated);
+    localStorage.setItem('affiliate_networks', JSON.stringify(updated));
+    setIsAdding(false);
+    setNewNetwork({ name: '', trackingId: '', color: 'bg-zinc-600' });
+  };
+
+  const colors = [
+    { name: 'Orange', value: 'bg-orange-500' },
+    { name: 'Red', value: 'bg-red-600' },
+    { name: 'Emerald', value: 'bg-emerald-600' },
+    { name: 'Blue', value: 'bg-blue-600' },
+    { name: 'Purple', value: 'bg-purple-600' },
+    { name: 'Pink', value: 'bg-pink-600' },
+    { name: 'Zinc', value: 'bg-zinc-600' },
   ];
 
   return (
@@ -1556,29 +1641,115 @@ function AffiliateView({ affiliateId, setAffiliateId }: { affiliateId: string, s
       className="space-y-6 lg:space-y-8"
     >
       <div className="bg-white p-5 lg:p-8 rounded-3xl border border-black/5 shadow-sm">
-        <h2 className="text-xl lg:text-2xl font-bold mb-2">聯盟行銷管理</h2>
-        <p className="text-zinc-500 text-sm mb-8">管理您的聯盟行銷帳號與追蹤 ID</p>
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <h2 className="text-xl lg:text-2xl font-bold mb-2">聯盟行銷管理</h2>
+            <p className="text-zinc-500 text-sm">管理您的聯盟行銷帳號與追蹤 ID</p>
+          </div>
+          <button 
+            onClick={() => setIsAdding(true)}
+            className="bg-black text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-zinc-800 transition-all"
+          >
+            <Plus size={14} /> 新增平台
+          </button>
+        </div>
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {networks.map((net, i) => (
-            <div key={i} className="p-6 bg-zinc-50 rounded-2xl border border-black/5 flex items-center justify-between">
+          {networks.map((net) => (
+            <div key={net.id} className="p-6 bg-zinc-50 rounded-2xl border border-black/5 flex items-center justify-between group relative">
               <div className="flex items-center gap-4">
                 <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold", net.color)}>
                   {net.name[0]}
                 </div>
                 <div>
                   <h3 className="font-bold text-sm lg:text-base">{net.name}</h3>
-                  <p className="text-[10px] text-zinc-400 uppercase tracking-widest">{net.status}</p>
+                  <p className={cn("text-[10px] uppercase tracking-widest font-bold", net.status === '已連接' ? "text-emerald-500" : "text-zinc-400")}>
+                    {net.status}
+                  </p>
                 </div>
               </div>
               <div className="text-right">
                 <p className="text-[10px] font-bold text-zinc-400 uppercase mb-1">追蹤 ID</p>
-                <p className="text-sm font-mono font-bold">{net.id}</p>
+                <p className="text-sm font-mono font-bold">{net.trackingId}</p>
               </div>
+              <button 
+                onClick={() => {
+                  const updated = networks.filter(n => n.id !== net.id);
+                  setNetworks(updated);
+                  localStorage.setItem('affiliate_networks', JSON.stringify(updated));
+                }}
+                className="absolute top-2 right-2 p-1 text-zinc-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+              >
+                <Trash2 size={12} />
+              </button>
             </div>
           ))}
         </div>
       </div>
+
+      {isAdding && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl"
+          >
+            <h3 className="text-xl font-bold mb-6">新增聯盟平台</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">平台名稱</label>
+                <input 
+                  type="text" 
+                  className="w-full px-4 py-3 bg-zinc-50 border-none rounded-2xl outline-none text-sm"
+                  placeholder="例如: ClickBank"
+                  value={newNetwork.name}
+                  onChange={(e) => setNewNetwork({ ...newNetwork, name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">追蹤 ID</label>
+                <input 
+                  type="text" 
+                  className="w-full px-4 py-3 bg-zinc-50 border-none rounded-2xl outline-none text-sm"
+                  placeholder="您的聯盟 ID"
+                  value={newNetwork.trackingId}
+                  onChange={(e) => setNewNetwork({ ...newNetwork, trackingId: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">標誌顏色</label>
+                <div className="flex flex-wrap gap-2">
+                  {colors.map((c) => (
+                    <button 
+                      key={c.value}
+                      onClick={() => setNewNetwork({ ...newNetwork, color: c.value })}
+                      className={cn(
+                        "w-8 h-8 rounded-lg transition-all",
+                        c.value,
+                        newNetwork.color === c.value ? "ring-2 ring-offset-2 ring-black" : "opacity-60 hover:opacity-100"
+                      )}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-8">
+              <button 
+                onClick={() => setIsAdding(false)}
+                className="flex-1 px-6 py-3 rounded-2xl font-bold text-sm bg-zinc-100 text-zinc-600 hover:bg-zinc-200 transition-all"
+              >
+                取消
+              </button>
+              <button 
+                onClick={handleAddNetwork}
+                className="flex-1 px-6 py-3 rounded-2xl font-bold text-sm bg-black text-white hover:bg-zinc-800 transition-all"
+              >
+                確認新增
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
 
       <div className="bg-white p-5 lg:p-8 rounded-3xl border border-black/5 shadow-sm">
         <h3 className="text-lg font-bold mb-6">快速設定</h3>
@@ -1595,10 +1766,17 @@ function AffiliateView({ affiliateId, setAffiliateId }: { affiliateId: string, s
                   localStorage.setItem('affiliateId', e.target.value);
                 }}
               />
-              <button className="bg-black text-white px-6 py-3 rounded-2xl font-bold text-sm hover:bg-zinc-800 transition-all">
-                更新
+              <button 
+                onClick={handleUpdate}
+                className="bg-black text-white px-6 py-3 rounded-2xl font-bold text-sm hover:bg-zinc-800 transition-all flex items-center gap-2"
+              >
+                {showSuccess ? <Check size={16} /> : null}
+                {showSuccess ? '已更新' : '更新'}
               </button>
             </div>
+            {showSuccess && (
+              <p className="text-[10px] text-emerald-500 font-bold mt-2 animate-pulse">設定已成功儲存至本地瀏覽器</p>
+            )}
           </div>
         </div>
       </div>
